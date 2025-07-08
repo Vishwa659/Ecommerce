@@ -5,6 +5,7 @@ const sqlite3 = require('sqlite3')
 const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
 
+
 const dbPath = path.join(__dirname, 'ecommerce.db')
 const app = express()
 
@@ -38,13 +39,69 @@ function authenticateToken(request, response, next) {
       if (error) {
         response.status(401).send('Invalid JWT Token')
       } else {
-        request.user = payload; 
+        request.users = payload; 
         next();
       }
     })
   }
 }
-app.get('/products', authenticateToken, async (request, response) => {
+
+function isAdmin(request, response, next) {
+  const { role } = request.users; 
+  if (role === 'admin') {
+    next(); 
+  } else {
+    response.status(403).json({ message: 'Access denied. Admins only.' });
+  }
+}
+
+
+
+
+app.post("/signup", async (request, response) => {
+  try {
+    const { name, email, username, password } = request.body;
+    const hashedPassword = await password;
+    const selectUserQuery = `SELECT * FROM users WHERE username = ?`;
+    const dbUser = await db.get(selectUserQuery, [username]);
+    if (dbUser === undefined) {
+      const createUserQuery = `
+        INSERT INTO users (name, email, username, password)
+        VALUES (?, ?, ?, ?)`;
+      const dbResponse = await db.run(createUserQuery, [name, email, username, hashedPassword]);
+      const newUserId = dbResponse.lastID;
+      response.json({ message: `Created new user with ${newUserId}` });
+    } else {
+      response.status(400).json({ message: "User already exists" });
+    }
+  } catch (error) {
+    console.error("Signup error:", error.message);
+    response.status(500).json({ message: "Server error during signup" });
+  }
+});
+// Login
+
+
+app.post("/login", async (request, response) => {
+  const { username, password } = request.body;
+  const selectUserQuery = `SELECT * FROM users WHERE username = ?`;
+  const dbUser = await db.get(selectUserQuery, [username]);
+  if (dbUser === undefined) {
+    response.status(400).json({ message: "Invalid User" });
+  } else {
+    const isPasswordMatched = await bcrypt.compare(password, dbUser.password);
+    if (isPasswordMatched === true) {
+      const payload = { id: dbUser.id, username: username, role: dbUser.role };
+      const jwtToken = jwt.sign(payload, 'MY_SECRET_TOKEN');
+      response.json({ message: "Login Success!", jwtToken });
+    } else {
+      response.status(400).json({ message: "Invalid Password" });
+    }
+  }
+});
+
+
+app.get('/products', authenticateToken,isAdmin, async (request, response) => {
   try {
     const productsQuery = `SELECT * FROM products;`;
     const products = await db.all(productsQuery);
@@ -56,7 +113,7 @@ app.get('/products', authenticateToken, async (request, response) => {
 
 app.get('/cart', authenticateToken, async (request, response) => {
   try {
-    const { id } = request.user;
+    const { id } = request.users;
     const getCartQuery = `
       SELECT cart.id, products.name, products.price, cart.quantity
       FROM cart
@@ -103,7 +160,7 @@ app.delete('/cart/:id', authenticateToken, async (request, response) => {
 app.post('/cart', authenticateToken, async (request, response) => {
   try {
     const { product_id, quantity } = request.body;
-    const { id: user_id } = request.user;
+    const { id: user_id } = request.users;
 
     const insertQuery = `
       INSERT INTO cart (user_id, product_id, quantity)
@@ -117,4 +174,4 @@ app.post('/cart', authenticateToken, async (request, response) => {
   }
 });
 
-module.exports = app
+module.exports = app;
